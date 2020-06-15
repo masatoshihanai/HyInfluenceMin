@@ -27,16 +27,18 @@ int main(int argc, char** argv) {
   int opt;
   std::string algType = "greedy";
   std::string measureType = "delete";
-  while ((opt = getopt(argc, argv, "hva:m:s:")) != -1) {
+  int numSample = 1000;
+  while ((opt = getopt(argc, argv, "hva:m:s:n:")) != -1) {
     switch (opt) {
       case 'h': {
         std::cerr << " HyMin - Hypergraph-based Influence Minimization Solver\n"
                   << "   Usage: $ " << argv[0] << " [-h] [-v] [-t <algorithm type>] <checkin-file> <# of restriction activities> \n"
                   << "      -h: Help\n"
                   << "      -v: Verbose. Output details\n"
-                  << "      -a: Algorithm type. greedy, random, or degree (default: greedy)\n"
+                  << "      -a: Algorithm type. greedy, degree or random (default: greedy)\n"
                   << "      -m: Safety Measure type. delete, shrink, or split (default: delete)\n"
                   << "      -s: random seed (default: 1)\n"
+                  << "      -n: # of Sampling for Live-edge graphs (default: 1000) \n"
                   << "\n"
                   << "    Example to use:\n"
                   << "      $ " << argv[0] << " -v -a greedy -m delete ../data/brightkite.checkin 100"
@@ -59,6 +61,10 @@ int main(int argc, char** argv) {
         xoshiro256p::initSeed(std::atol(optarg));
         break;
       }
+      case 'n': {
+        numSample = std::atol(optarg);
+        break;
+      }
       default:
         return 1;
     }
@@ -74,14 +80,20 @@ int main(int argc, char** argv) {
   hygraph.init(argv[optind]);
 
   int k = std::atoi(argv[optind+1]);
+//  k = hygraph.numHyEdges() * 0.001;
+
   std::cout << "--------- Initial Info --------" << std::endl;
   std::cout << " Data: " << argv[optind] << std::endl;
+  std::cout << " # check-in:      " << hygraph.numCheckIn() << std::endl;
   std::cout << " # vertices:      " << hygraph.numVert() << std::endl;
   std::cout << " # hyperedges:    " << hygraph.numHyEdges() << std::endl;
   std::cout << " # restriction k: " << k << std::endl;
   std::cout << " Algorithm:       " << algType << std::endl;
   std::cout << " Safety Measure:  " << measureType << std::endl;
   std::cout << "-------------------------------" << std::endl;
+
+//  LiveEdgeBasedInfEstimator initEstimator; initEstimator.init(&hygraph, 100);
+//  uint64_t initialNumInf = initEstimator.numInf();
 
   /* Start */
   std::cout << "==== Start Computation ====" << std::endl;
@@ -95,55 +107,87 @@ int main(int argc, char** argv) {
       topKHyEdges.insert(e);
     }
   } else if (algType == "degree") {
-    IncrementalInfEstimator incEstimator;
-    int numSample = 10;
-    incEstimator.init(&hygraph, numSample);
-    std::vector<std::pair<HyEdgeID,uint64_t>> degrees;
+    std::vector<std::pair<HyEdgeID, uint64_t>> degrees;
     for (HyEdgeID i = 0; i < hygraph.numHyEdges(); ++i) {
       degrees.emplace_back(i, hygraph.getHyEdge(i).vertices_.size());
     }
     std::sort(degrees.begin(), degrees.end(),
       [](const std::pair<HyEdgeID,uint64_t>& left, const std::pair<HyEdgeID,uint64_t>& right){ return left.second > right.second; });
     for (int i = 0; i < k; ++i) {
-      std::cout << degrees.at(i).first << std::endl;
+      std::cout << "  Get " << degrees.at(i).first << " whose degree is " << degrees.at(i).second << std::endl;
       topKHyEdges.insert(degrees.at(i).first);
-      VertID numInf = incEstimator.estimateNumInf(degrees.at(i).first);
-      std::cout << "numInf for " << degrees.at(i).first << " is " << numInf << std::endl;
     }
-  } else if (algType == "test"){
-    int numSample = 10;
+  } else if (algType == "RstRR-path-sampling"){
+    RstRRInfEstimator estimator;
+    VertID theta = 0;
+    estimator.init(&hygraph, k);
+//    for (uint64_t pow2_i = 1; pow2_i < hygraph.numVert(); pow2_i *= 2) {
+//      theta = estimator.getNumSample(pow2_i);
+//      estimator.addSampleUntil(theta);
+//      if (estimator.runGreedy(pow2_i)) {
+//        break;
+//      }
+//    }
 
-    IncrementalInfEstimator incEstimator0;
-    incEstimator0.init(&hygraph, numSample);
-    std::cout << "init num inf " << incEstimator0.numInf() << std::endl;
-    std::cout << "numinf for remove 82 " << incEstimator0.estimateNumInf(82) << std::endl;
+//    theta = estimator.getSamplingSize();
+    theta = 100000;
+    estimator.addSampleUntil(theta);
+    estimator.runGreedy();
 
-    IncrementalInfEstimator incEstimator1;
-    hygraph.restrictHyEdge(82);
-    incEstimator1.init(&hygraph, numSample);
-    std::cout << "numinf for remove 82 actual " << incEstimator1.numInf() << std::endl;
+    topKHyEdges = estimator.topKHyEdges;
 
+    std::unordered_set<VertID> tmp;
+
+    std::vector<std::pair<HyEdgeID, uint64_t>> degrees;
+    for (HyEdgeID i = 0; i < hygraph.numHyEdges(); ++i) {
+      degrees.emplace_back(i, hygraph.getHyEdge(i).vertices_.size());
+    }
+    std::sort(degrees.begin(), degrees.end(),
+              [](const std::pair<HyEdgeID,uint64_t>& left, const std::pair<HyEdgeID,uint64_t>& right){ return left.second > right.second; });
+    for (int i = 0; i < k; ++i) {
+      std::cout << "  Get " << degrees.at(i).first << " whose degree is " << degrees.at(i).second << std::endl;
+      tmp.insert(degrees.at(i).first);
+    }
+
+
+    estimator.evaluate(tmp);
+  } else if (algType == "greedy-efficient"){
+    LiveEdgeBasedInfEstimator incEstimator;
+    incEstimator.init(&hygraph, 10);
+    std::vector<std::pair<HyEdgeID,uint64_t>> degrees;
+    for (HyEdgeID i = 0; i < hygraph.numHyEdges(); ++i) {
+      degrees.emplace_back(i, hygraph.getHyEdge(i).vertices_.size());
+    }
+    std::sort(degrees.begin(), degrees.end(),
+              [](const std::pair<HyEdgeID,uint64_t>& left, const std::pair<HyEdgeID,uint64_t>& right){ return left.second > right.second; });
+    for (int i = 0; i < k; ++i) {
+      std::cout << "  Greedily Getting " << i << "-th from 1% Hyperedges to be restricted ..." << std::endl;
+      HyEdgeID e_min; VertID minInf = VID_MAX;
+      for (int i = 0; i < degrees.size() / 100; ++i) {
+        HyEdgeID e = degrees.at(i).first;
+        if (topKHyEdges.count(e) > 0) continue;
+        VertID numInf = incEstimator.estimateNumInf(e);
+        if (numInf < minInf) {
+          minInf = numInf;
+          e_min = e;
+        }
+        std::cout << "\r    Finish " << i << " Hyperedges out of " << degrees.size() / 100 << " current min is " << e_min << ". Its inf is " << minInf << "        " << std::flush;
+      }
+      std::cout << std::endl;
+      incEstimator.update(e_min);
+      topKHyEdges.insert(e_min);
+      std::cout << "  Finish. " << i << "-th Local Min is " << e_min << std::endl;
+    }
   } else {
     /* greedy algorithm */
-    IncrementalInfEstimator incEstimator;
-    int numSample = 10;
+    LiveEdgeBasedInfEstimator incEstimator;
     incEstimator.init(&hygraph, numSample);
     for (int i = 0; i < k; ++i) {
       std::cout << "  Greedily Getting " << i << "-th Hyperedge to be restricted ..." << std::endl;
       HyEdgeID e_min; VertID minInf = VID_MAX;
-//      for (HyEdgeID e = 0; e < hygraph.numHyEdges(); ++e) {
-      std::vector<std::pair<HyEdgeID,uint64_t>> degrees;
-      for (HyEdgeID i = 0; i < hygraph.numHyEdges(); ++i) {
-        degrees.emplace_back(i, hygraph.getHyEdge(i).vertices_.size());
-      }
-      std::sort(degrees.begin(), degrees.end(),
-                [](const std::pair<HyEdgeID,uint64_t>& left, const std::pair<HyEdgeID,uint64_t>& right){ return left.second > right.second; });
-      for (int i = 0; i < 100; ++i) {
-        HyEdgeID e = degrees.at(i).first;
-
+      for (HyEdgeID e = 0; e < hygraph.numHyEdges(); ++e) {
         if (topKHyEdges.count(e) > 0) continue;
         VertID numInf = incEstimator.estimateNumInf(e);
-        //std::cout << numInf << std::endl;
         if (numInf < minInf) {
           minInf = numInf;
           e_min = e;
@@ -162,21 +206,20 @@ int main(int argc, char** argv) {
 
   /* Analyze Result */
   std::cout << "---- Start Analyze Result ----" << std::endl;
-  std::cout << "!!!! Restriction Activities !!!!" << std::endl;
-  std::cout << " HyEdge ID: ";
+  std::cout << "  Restriction Activities (HyEdgeID): ";
   for (auto& x: topKHyEdges) {
     std::cout << x << ",";
   }
   std::cout << std::endl;
 
   /* calculate # of influence (infected vertices) */
-  IncrementalInfEstimator estimator;
-  hygraph.restrictHyEdges(topKHyEdges);
-  estimator.init(&hygraph,100);
-  std::cout << "# Influence is " << estimator.numInf() << std::endl;
-
-  std::cout << std::endl;
-  std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
+  //LiveEdgeBasedInfEstimator estimator;
+  //hygraph.restrictHyEdges(topKHyEdges);
+  //estimator.init(&hygraph, 100);
+  MonteCarloSimInfEstimator estimator;
+  estimator.init(&hygraph);
+  std::unordered_set<HyEdgeID> empty;
+  std::cout << "  Influence Reduction Ratio: " << (1.0 - (double) estimator.estimateNumInf(topKHyEdges)/estimator.estimateNumInf(empty)) << std::endl;
   std::cout << "----  Finish ----" << std::endl;
 
   return 0;

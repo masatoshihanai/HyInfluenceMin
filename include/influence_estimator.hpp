@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <math.h>
+#include <list>
 
 #include "hygraph.hpp"
 #include "wtime.hpp"
@@ -19,7 +21,258 @@
 #include <omp.h>
 #endif
 
-class IncrementalInfEstimator {
+class RstRRInfEstimator {
+  uint64_t choose(uint64_t n, uint64_t k) {
+    if (k == 0) return 1;
+    return (n * choose(n - 1, k - 1)) / k;
+  }
+
+  const double apprxFctr = 1.0 - 1 / 2.71828;
+  VertID n_;
+  VertID LB_;
+  int k_;
+  uint64_t lambda0_;
+  uint64_t lambda1_;
+  uint64_t curNumSample_;
+  double eps_;
+
+  HyGraph* hygraph_;
+  struct RstRRpath {
+    std::deque<VertID> vertice_; // from v
+    std::deque<HyEdgeID> hyedges_;
+  };
+  std::vector<RstRRpath> rstRRpaths;
+  uint64_t numSample = 0;
+  std::vector<std::vector<HyEdgeID>> hyEdge2RstRRpath;
+  std::vector<uint64_t> deltaReduction;
+  std::vector<double> vThresholds;
+
+  void genRandomRstRRpath() {
+    RstRRpath rstRRpath;
+    VertID parent = -1;
+    uint64_t dstFromV = 0;
+    VertID v = xoshiro256p::next() % hygraph_->numVert();
+    std::unordered_set<VertID> visited;
+    visited.insert(v);
+    std::unordered_map<HyEdgeID, uint64_t> visitedHyEdges; // <HyEdgeID, dst from v>
+    rstRRpath.vertice_.push_back(v);
+
+    /* Backward traversal from v */
+    while (true) {
+      double rand = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      bool finish = false;
+      for (auto hyEid: hygraph_->neighbors(v)) {
+        for (auto u: hygraph_->getHyEdge(hyEid).vertices_) {
+          if (u == v) continue;
+          rand -= hygraph_->getIF(u,hyEid);
+          if (rand < 0) {
+            if (visited.count(u) == 0) {
+              if (visitedHyEdges.count(hyEid) == 0) {
+                visitedHyEdges.emplace(hyEid, dstFromV);
+                hyEdge2RstRRpath.at(hyEid).push_back(numSample);
+              }
+              visited.insert(u);
+              parent = u;
+              rstRRpath.vertice_.push_back(u);
+              rstRRpath.hyedges_.push_back(hyEid);
+            }
+            finish = true;
+            break;
+          }
+        }
+        if (finish) break;
+      }
+
+      if (parent == -1) {
+        break;
+      } else {
+        v = parent;
+        parent = -1;
+      }
+      ++dstFromV;
+    }
+    for (auto x: visitedHyEdges) {
+      deltaReduction.at(x.first) += (dstFromV - x.second);
+      //todo std::cout << "deltaReduction at " << x.first << " is " << deltaReduction.at(x.first) << " dstFromV " << dstFromV  << " x.second " << x.second << std::endl;
+    }
+    rstRRpaths.push_back(rstRRpath);
+    ++numSample;
+
+    // todo remove
+//    std::unordered_set<VertID> s;
+//    for (auto x: rstRRpath.vertice_) {
+//      std::cout << x << " ";
+//      s.insert(x);
+//    }
+//    std::cout << std::endl;
+//
+//    for (auto x: rstRRpath.hyedges_) {
+//      std::cout << x << " ";
+//    }
+//    std::cout << std::endl;
+
+  };
+
+ public:
+  void init(HyGraph* hygraph, int k, double l = 1, double eps = 0.1) {
+    // todo
+    xoshiro256p::initSeed(0);
+    vThresholds.resize(hygraph->numVert());
+    for (auto& x: vThresholds) { x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next()); }
+
+    eps_ = eps;
+    hygraph_ = hygraph;
+    k_ = k;
+    n_ = hygraph_->numVert();
+    l = l + log(2)/log(n_); // todo
+    uint64_t E_C_k = choose(hygraph_->numHyEdges(), k);
+    lambda0_ = 2*n_*(apprxFctr * sqrt(l*log(n_) + log(2)) + apprxFctr*(log(E_C_k) + l*log(n_) + log(2)))/(eps*eps);
+    lambda1_ = ((double) 1.0+sqrt(2)*eps/3)*(log(E_C_k) + l*log(n_) + log(log2(n_)))*n_/(eps*eps);
+    deltaReduction.resize(hygraph_->numHyEdges());
+    std::fill(deltaReduction.begin(), deltaReduction.end(), 0);
+    hyEdge2RstRRpath.resize(hygraph_->numHyEdges());
+  };
+
+  VertID getNumSample(VertID pow2_i) {
+    return pow2_i * lambda0_ / n_;
+  };
+
+  void addSampleUntil(VertID theta) {
+    while (numSample < theta) {
+      genRandomRstRRpath();
+    }
+  };
+
+  VertID sumReduction = 0;
+  std::unordered_set<HyEdgeID> topKHyEdges;
+  bool runGreedy(uint64_t pow2_i = 1) {
+    sumReduction = 0;
+    topKHyEdges.clear();
+    std::vector<long> deltaReductionTmp = std::vector<long>(hygraph_->numHyEdges(),0);
+    std::vector<long> rstRRpathsTmpSize = std::vector<long>(rstRRpaths.size());
+    uint64_t av = 0;
+    for (int sample = 0; sample < rstRRpaths.size(); ++sample) {
+      rstRRpathsTmpSize.at(sample) = rstRRpaths.at(sample).hyedges_.size();
+      av += rstRRpaths.at(sample).vertice_.size();
+    }
+    std::cout << "average path size " << (double) av/ rstRRpaths.size() << std::endl;
+
+    for (int i = 0; i < k_; ++i) {
+      uint64_t maxReduction = 0; HyEdgeID maxEdge;
+      for (HyEdgeID hyEdgeId = 0; hyEdgeId < hygraph_->numHyEdges(); ++hyEdgeId) {
+        if (topKHyEdges.count(hyEdgeId) > 0) continue;
+        if (maxReduction < deltaReduction.at(hyEdgeId) + deltaReductionTmp.at(hyEdgeId)) {
+          if (deltaReduction.at(hyEdgeId) < (-1)*deltaReductionTmp.at(hyEdgeId)) {
+            std::cout << hyEdgeId << "deltaReduction.at(hyEdgeId)" << deltaReduction.at(hyEdgeId) << "deltaReductionTmp.at(hyEdgeId)" << deltaReductionTmp.at(hyEdgeId) << std::endl;
+          }
+          maxReduction = deltaReduction.at(hyEdgeId) + deltaReductionTmp.at(hyEdgeId);
+          maxEdge = hyEdgeId;
+        }
+      }
+      std::cout << "num sample " << numSample << " " << i << "-th Local Max is " << maxEdge << " " << maxReduction << std::endl;
+      topKHyEdges.insert(maxEdge);
+      /* Update RstRR path*/
+      for (uint64_t ii = 0; ii < hyEdge2RstRRpath.at(maxEdge).size(); ++ii) {
+        uint64_t sampleID = hyEdge2RstRRpath.at(maxEdge).at(ii);
+        RstRRpath& rstRRpath = rstRRpaths.at(sampleID);
+        std::unordered_set<HyEdgeID> updated;
+        bool updating = false;
+        uint64_t newSize = 0;
+        for (uint64_t j = 0; j < rstRRpathsTmpSize.at(sampleID); ++j) {
+          HyEdgeID& hyEdgeID = rstRRpath.hyedges_.at(j);
+          if (hyEdgeID == maxEdge && updating == false) {
+            updating = true;
+            newSize = j;
+          }
+          if (updating && updated.count(hyEdgeID) == 0) {
+//            if (hyEdgeID == 32) {
+//              std::cout << j << " " << sampleID <<  " 32 " << deltaReductionTmp.at(hyEdgeID) << " " << rstRRpathsTmpSize.at(sampleID) << " " << deltaReduction.at(hyEdgeID) << " " << rstRRpathsTmpSize.at(sampleID) - j << std::endl;
+//            }
+            deltaReductionTmp.at(hyEdgeID) -= rstRRpathsTmpSize.at(sampleID) - j;
+            updated.insert(hyEdgeID);
+          }
+        }
+        rstRRpathsTmpSize.at(sampleID) = newSize;
+      }
+    }
+
+// todo fix
+    for (auto x: topKHyEdges) {
+      sumReduction += deltaReduction.at(x) + deltaReductionTmp.at(x);
+    }
+
+    std::cout << "sumReduction" << sumReduction << " per sample " << (double) sumReduction/numSample << std::endl;
+    std::cout << "eps" << eps_ << " pow2_i" << pow2_i << std::endl;
+    return (double) sumReduction/numSample > (double)(1.0+sqrt(2)*eps_)/pow2_i;
+  };
+
+  void evaluate(std::unordered_set<VertID>& rstVertices) {
+    sumReduction = 0;
+    topKHyEdges.clear();
+    std::vector<long> deltaReductionTmp = std::vector<long>(hygraph_->numHyEdges(),0);
+    std::vector<long> rstRRpathsTmpSize = std::vector<long>(rstRRpaths.size());
+    uint64_t av = 0;
+    for (int sample = 0; sample < rstRRpaths.size(); ++sample) {
+      rstRRpathsTmpSize.at(sample) = rstRRpaths.at(sample).hyedges_.size();
+      av += rstRRpaths.at(sample).vertice_.size();
+    }
+    std::cout << "average path size " << (double) av/ rstRRpaths.size() << std::endl;
+
+    for (int i = 0; i < k_; ++i) {
+      uint64_t maxReduction = 0; HyEdgeID maxEdge;
+//      for (HyEdgeID hyEdgeId = 0; hyEdgeId < hygraph_->numHyEdges(); ++hyEdgeId) {
+//        if (topKHyEdges.count(hyEdgeId) > 0) continue;
+//        if (maxReduction < deltaReduction.at(hyEdgeId) + deltaReductionTmp.at(hyEdgeId)) {
+//          if (deltaReduction.at(hyEdgeId) < (-1)*deltaReductionTmp.at(hyEdgeId)) {
+//            std::cout << hyEdgeId << "deltaReduction.at(hyEdgeId)" << deltaReduction.at(hyEdgeId) << "deltaReductionTmp.at(hyEdgeId)" << deltaReductionTmp.at(hyEdgeId) << std::endl;
+//          }
+//          maxReduction = deltaReduction.at(hyEdgeId) + deltaReductionTmp.at(hyEdgeId);
+//          maxEdge = hyEdgeId;
+//        }
+//      }
+//      std::cout << "num sample " << numSample << " " << i << "-th Local Max is " << maxEdge << " " << maxReduction << std::endl;
+      auto it = rstVertices.begin();
+      maxEdge = *it;
+      rstVertices.erase(it);
+      topKHyEdges.insert(maxEdge);
+      /* Update RstRR path*/
+      for (uint64_t ii = 0; ii < hyEdge2RstRRpath.at(maxEdge).size(); ++ii) {
+        uint64_t sampleID = hyEdge2RstRRpath.at(maxEdge).at(ii);
+        RstRRpath& rstRRpath = rstRRpaths.at(sampleID);
+        std::unordered_set<HyEdgeID> updated;
+        bool updating = false;
+        uint64_t newSize = 0;
+        for (uint64_t j = 0; j < rstRRpathsTmpSize.at(sampleID); ++j) {
+          HyEdgeID& hyEdgeID = rstRRpath.hyedges_.at(j);
+          if (hyEdgeID == maxEdge && updating == false) {
+            updating = true;
+            newSize = j;
+          }
+          if (updating && updated.count(hyEdgeID) == 0) {
+//            if (hyEdgeID == 32) {
+//              std::cout << j << " " << sampleID <<  " 32 " << deltaReductionTmp.at(hyEdgeID) << " " << rstRRpathsTmpSize.at(sampleID) << " " << deltaReduction.at(hyEdgeID) << " " << rstRRpathsTmpSize.at(sampleID) - j << std::endl;
+//            }
+            deltaReductionTmp.at(hyEdgeID) -= rstRRpathsTmpSize.at(sampleID) - j;
+            updated.insert(hyEdgeID);
+          }
+        }
+        rstRRpathsTmpSize.at(sampleID) = newSize;
+      }
+    }
+
+// todo fix
+    for (auto x: topKHyEdges) {
+      sumReduction += deltaReduction.at(x) + deltaReductionTmp.at(x);
+    }
+    std::cout << "sumReduction" << sumReduction << " per sample " << (double) sumReduction/numSample << std::endl;
+  }
+
+  VertID getSamplingSize () {
+    return sumReduction/numSample*hygraph_->numVert()/((double) 1+sqrt(2)*eps_);
+  };
+};
+
+class LiveEdgeBasedInfEstimator {
   using VertIDHyEdgeID = std::pair<VertID,HyEdgeID>;
   using EdgeID = uint64_t;
   struct Edge {
@@ -34,54 +287,135 @@ class IncrementalInfEstimator {
     std::vector<VertIDHyEdgeID> inVertices_;
     std::vector<VertID> r_;
   };
-
   std::vector<LiveEdgeTree*> liveEdgeTrees_;
+  HyGraph* hygraph_;
+  VertID numInfluence_;
+  int numSample_;
 
+ public:
+  void init(HyGraph* hyGraph, int numSample = 1) {
+    xoshiro256p::initSeed(1);
+    /* Construct live-edge tree */
+    hygraph_ = hyGraph;
+    numSample_ = numSample;
+#ifdef HAS_OMP
+#pragma omp parallel for
+#endif
+    for (int i = 0; i < numSample; ++i) {
+#ifdef HAS_OMP
+      int numJump = omp_get_thread_num();
+      for (int j = 0; j < numJump; ++j) { xoshiro256p::jump(); }
+#endif
+      std::vector<LiveEdgeTree*> newLET;
+      constructLiveEdgeTrees(hyGraph, newLET);
+#ifdef HAS_OMP
+      #pragma omp critical
+#endif
+      {
+        for (auto& let: newLET) {
+          liveEdgeTrees_.push_back(let);
+        }
+      };
+    }
+    /* compute numInfluence */
+    numInfluence_ = 0;
+    for (int i = 0; i < liveEdgeTrees_.size(); ++i) {
+      for (auto& x: liveEdgeTrees_.at(i)->r_) {
+        numInfluence_ += x;
+      }
+    }
+  };
+
+  VertID numInf() {
+    return numInfluence_;
+  }
+
+  VertID estimateNumInf(HyEdgeID removeHyEdge) {
+    VertID totalReduce = 0;
+#ifdef HAS_OMP
+#pragma omp parallel for
+#endif
+    for (int i = 0; i < liveEdgeTrees_.size(); ++i) {
+      LiveEdgeTree* let = liveEdgeTrees_.at(i);
+      std::vector<int> dstVertices;
+      for (auto& v: hygraph_->getHyEdge(removeHyEdge).vertices_) {
+        if (let->globalID2localID_.count(v) == 0) continue;
+        for (auto& u: hygraph_->getHyEdge(removeHyEdge).vertices_) {
+          if (v == u) continue;
+          if (let->globalID2localID_.count(u) == 0) continue;
+          /* v and u are in the tree */
+          int localV = let->globalID2localID_.at(v);
+          int localU = let->globalID2localID_.at(u);
+          if (localV < localU) {
+            if (let->inVertices_.at(localU).first == localV
+                && let->inVertices_.at(localU).second == removeHyEdge) {
+              /* v to u exists */
+              dstVertices.push_back(localU);
+            }
+          }
+        }
+      }
+
+      std::sort(dstVertices.begin(), dstVertices.end());
+
+      uint64_t reducedVertices = 0;
+      while (!dstVertices.empty()) {
+        VertID dst = dstVertices.back();
+        dstVertices.pop_back();
+        int cur = let->inVertices_.at(dst).first;
+        reducedVertices += let->r_.at(dst) + 1;
+        while (cur != let->root_) {
+          if (std::binary_search(dstVertices.begin(), dstVertices.end(), cur)) {
+            break;
+          }
+          cur = let->inVertices_.at(cur).first;
+          reducedVertices += let->r_.at(dst) + 1;
+        }
+      }
+
+#ifdef HAS_OMP
+#pragma omp critical
+#endif
+      {
+        totalReduce += reducedVertices;
+      }
+    }
+    return numInfluence_ - totalReduce;//(numInfluence_ - totalReduce)/numSample_/hygraph_->numVert();
+  };
+
+  void update(HyEdgeID removalHyEdge) {
+    liveEdgeTrees_.clear();
+    hygraph_->restrictHyEdge(removalHyEdge);
+    init(hygraph_,10);
+  };
+
+ private:
   void constructLiveEdgeTrees(HyGraph* hyGraph, std::vector<LiveEdgeTree*>& let) {
     std::vector<std::vector<VertIDHyEdgeID>> outedges(hyGraph->numVert());
     std::vector<bool> roots(hyGraph->numVert(), true);
 
-    std::vector<VertID> in82vert;// todo
     /* Construct live-edge graph */
     for (VertID v = 0; v < hyGraph->numVert(); ++v) {
       VertID parent = -1;
-      HyEdgeID selectedHyEID = -1;
       bool isRoot = true;
       double rand = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      bool finish = false;
       for (auto hyEid: hyGraph->neighbors(v)) {
-        HyEdge &hyE = hyGraph->getHyEdge(hyEid);
-        if (rand < hyE.IF_) {
-          selectedHyEID = hyEid;
-          // todo remove
-//          std::cout << "selected hyedge " << selectedHyEID << std::endl;
-          break;
-        } else {
-          rand -= hyE.IF_;
-        }
-      }
-      rand = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
-      if (selectedHyEID != -1) {
-        for (auto u: hyGraph->getHyEdge(selectedHyEID).vertices_) {
+        for (auto u: hygraph_->getHyEdge(hyEid).vertices_) {
           if (u == v) continue;
-          if (rand < hyGraph->getVertIF(u)) {
+          if (rand < hygraph_->getIF(u,hyEid)) {
             parent = u;
             roots.at(v) = false;
-            if (selectedHyEID == 82) {
-              //std::cout << "select " << parent << " to " << v << std::endl;
-              in82vert.push_back(v);
-            } //todo remove
-            outedges.at(parent).emplace_back(v,selectedHyEID);
+            outedges.at(parent).emplace_back(v,hyEid);
+            finish = true;
             break;
           } else {
-            rand -= hyGraph->getVertIF(u);
+            rand -= hygraph_->getIF(u,hyEid);
           }
         }
+        if (finish) break;
       }
     }
-//    for (int i = 0; i < roots.size(); ++i) {
-//      if (roots.at(i) == true) std::cout << i << " is root" << std::endl;
-//    }
-//    std::cout << "outedges" << outedges.at(0).size() << std::endl;
 
     /* Decompose to multiple live-edge trees */
     for (VertID v = 0; v < roots.size(); ++v) {
@@ -121,144 +455,29 @@ class IncrementalInfEstimator {
         let.push_back(l);
       }
     }
-    // todo remove
-//    for (auto l: let) {
-//      for (auto x: in82vert) {
-//        if (l->globalID2localID_.count(x) > 0) {
-//          std::cout << x << " r value " << l->r_.at(l->globalID2localID_.at(x)) << std::endl;
-//        }
-//      }
-//    }
   }
-  HyGraph* hygraph_;
-  VertID numInfluence_;
-  int numSample_;
-
- public:
-  void init(HyGraph* hyGraph, int numSample = 1) {
-    /* Construct live-edge tree */
-    xoshiro256p::initSeed(0);
-    hygraph_ = hyGraph;
-    numSample_ = numSample;
-#ifdef HAS_OMP
-#pragma omp parallel for
-#endif
-    for (int i = 0; i < numSample; ++i) {
-#ifdef HAS_OMP
-      int numJump = omp_get_thread_num();
-      for (int j = 0; j < numJump; ++j) { xoshiro256p::jump(); }
-#endif
-      std::vector<LiveEdgeTree*> newLET;
-      constructLiveEdgeTrees(hyGraph, newLET);
-#ifdef HAS_OMP
-      #pragma omp critical
-#endif
-      {
-        for (auto& let: newLET) {
-          liveEdgeTrees_.push_back(let);
-        }
-      };
-    }
-    /* compute numInfluence */
-    numInfluence_ = 0;
-    std::cout << "liveEdgeTrees_.size() " << liveEdgeTrees_.size() << std::endl;
-    for (int i = 0; i < liveEdgeTrees_.size(); ++i) {
-      for (auto& x: liveEdgeTrees_.at(i)->r_) {
-        numInfluence_ += x;
-      }
-    }
-    std::cout << "numInf becomes: " << numInfluence_ << std::endl;
-  };
-
-  VertID estimateNumInf(HyEdgeID removeHyEdge) {
-    VertID totalReduce = 0;
-//    std::cout << "estimate remove " << removeHyEdge << std::endl;
-#ifdef HAS_OMP
-#pragma omp parallel for
-#endif
-    for (int i = 0; i < liveEdgeTrees_.size(); ++i) {
-      LiveEdgeTree* let = liveEdgeTrees_.at(i);
-      std::vector<int> dstVertices;
-      for (auto& v: hygraph_->getHyEdge(removeHyEdge).vertices_) {
-        if (let->globalID2localID_.count(v) == 0) continue;
-        for (auto& u: hygraph_->getHyEdge(removeHyEdge).vertices_) {
-          if (v == u) continue;
-          if (let->globalID2localID_.count(u) == 0) continue;
-          /* v and u are in the tree */
-          int localV = let->globalID2localID_.at(v);
-          int localU = let->globalID2localID_.at(u);
-          if (localV < localU) {
-            if (let->inVertices_.at(localU).first == localV
-                && let->inVertices_.at(localU).second == removeHyEdge) {
-              /* v to u exists */
-              //std::cout << i << " remove " << v << " to " << u << std::endl;
-              dstVertices.push_back(localU);
-            }
-          }
-        }
-      }
-
-      std::sort(dstVertices.begin(), dstVertices.end());
-
-      uint64_t reducedVertices = 0;
-//      if (i == 27) { // todo
-//        std::cout << "debug " << std::endl;
-//      }
-      while (!dstVertices.empty()) {
-        VertID dst = dstVertices.back();
-        dstVertices.pop_back();
-        int cur = let->inVertices_.at(dst).first;
-        reducedVertices += let->r_.at(dst) + 1;
-        while (cur != let->root_) {
-          if (std::binary_search(dstVertices.begin(), dstVertices.end(), cur)) {
-            break;
-          }
-          cur = let->inVertices_.at(cur).first;
-          reducedVertices += let->r_.at(dst) + 1;
-        }
-      }
-//      if (i == 27) std::cout << "reduce vertices " << reducedVertices << std::endl;// todo
-
-#ifdef HAS_OMP
-#pragma omp critical
-#endif
-      {
-        totalReduce += reducedVertices;
-      }
-    }
-//    std::cout << "numInfluence_" << numInfluence_ << std::endl;
-//    std::cout << "total_" << totalReduce << std::endl;
-//    std::cout << numInfluence_ - totalReduce << std::endl;
-    return numInfluence_ - totalReduce;//(numInfluence_ - totalReduce)/numSample_/hygraph_->numVert();
-  };
-
-  VertID numInf() {
-    return numInfluence_;
-  }
-
-  void update(HyEdgeID removalHyEdge) {
-    liveEdgeTrees_.clear();
-    hygraph_->restrictHyEdge(removalHyEdge);
-    init(hygraph_,10);
-  };
 };
 
 class MonteCarloSimInfEstimator {
   HyGraph* hyGraph_;
+  std::vector<double> vThresholds;
  public:
   void init(HyGraph* hyGraph) {
     hyGraph_ = hyGraph;
     xoshiro256p::initSeed(0);
+    vThresholds.resize(hyGraph_->numVert());
+    for (auto& x: vThresholds) { x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next()); }
   };
 
   VertID estimateNumInf(HyEdgeID cuttingHedge, int numSampling = 10) {
     std::unordered_set<HyEdgeID> cut;
     cut.insert(cuttingHedge);
-    estimateNumInf(cut, numSampling);
+    return estimateNumInf(cut, numSampling);
   };
 
   VertID estimateNumInf(const std::unordered_set<HyEdgeID>& cuttingHedges,
-                        int numSampling = 1) {
+                        int numSampling = 100) {
+    xoshiro256p::initSeed(0);
     std::cout << "    Start Cascade Simulation. # Sampling: " << numSampling << " ... " << std::flush;
     std::vector<VertID> numInfected(numSampling, 0);
 #ifdef HAS_OMP
@@ -270,14 +489,17 @@ class MonteCarloSimInfEstimator {
       for (int j = 0; j < numJump; ++j) { xoshiro256p::jump(); }
 #endif
       double start = getTime();
+      // todo
+      for (auto& x: vThresholds) { x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next()); }
       std::vector<bool> infectedV(hyGraph_->numVert(), false);
       std::vector<bool> visitV(hyGraph_->numVert(), false);
-      std::vector<double> vThresholds(hyGraph_->numVert());
-      for (auto& x: vThresholds) { x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next()); }
       std::vector<double> vThresholdsVar(hyGraph_->numVert());
-      vThresholdsVar = vThresholds;
+//      vThresholdsVar = vThresholds;
       double prepTime = 0;
-      for (VertID seed = 0; seed < hyGraph_->numVert(); ++seed){
+//      for (VertID j = 0; j < hyGraph_->numVert()/1000; ++j){
+//        VertID seed = xoshiro256p::next() % hyGraph_->numVert();
+      for (VertID j = 0; j < hyGraph_->numVert(); ++j){
+        VertID seed = j;
         std::fill(infectedV.begin(), infectedV.end(), false);
         std::fill(visitV.begin(), visitV.end(), false);
 
@@ -298,7 +520,7 @@ class MonteCarloSimInfEstimator {
                 vThresholdsVar.at(neV) = vThresholds.at(neV);
                 visitV.at(neV) = true;
               }
-              vThresholdsVar.at(neV) -= hyEdge.IF_*hyGraph_->getVertIF(neV);
+              vThresholdsVar.at(neV) -= hyGraph_->getIF(curr, neHyEdgeID);
               if (vThresholdsVar.at(neV) < 0) {
                 infectedV.at(neV) = true;
                 ++numInfected.at(i);
@@ -314,6 +536,7 @@ class MonteCarloSimInfEstimator {
     std::cout << " Finish to Run " << numSampling << " Simulations." << std::endl;
     VertID sumInfected = 0;
     for (auto x: numInfected) { sumInfected += x; }
+    std::cout << "sum infected " << sumInfected << std::endl;
     return sumInfected / numSampling;
   };
 };
