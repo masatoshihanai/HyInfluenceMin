@@ -14,14 +14,14 @@
 #include <sstream>
 #include <time.h>
 #include <unordered_set>
+#include <unordered_map>
 
-//int TIME_UNIT = 86400; // 1 day = 60 * 60 * 24 = 86400 sec
-//int TIME_UNIT = 86400*7*4; // 7 day = 60 * 60 * 24 * 7= 86400 sec
-int TIME_UNIT = std::numeric_limits<int>::max(); // No time unit
+int TIME_UNIT_HOUR = 12; // Chech-ins within 12 hours are considered to be the same activity
 
 using VertID = int;
 VertID VID_MAX = std::numeric_limits<VertID>::max();
 using Vertices = std::vector<VertID>;
+using VertSet = std::unordered_set<VertID>;
 
 using LocationID = int;
 struct Location {
@@ -34,9 +34,11 @@ using HyEdgeID = int;
 struct HyEdge{
   double IF_;
   LocationID lID_ = 0;
-  std::unordered_set<VertID> vertices_;
+  //std::unordered_set<VertID> vertices_;
+  Vertices vertices_;
 };
 using HyEdges = std::vector<HyEdge>;
+using HyIDSet = std::unordered_set<HyEdgeID>;
 
 class HyGraph {
   VertID numVert_;
@@ -45,7 +47,7 @@ class HyGraph {
   HyEdges hyEdges_;
   Locations locations_;
   uint64_t numCheckIn_;
-  double maxMultiInfFactor;
+  std::vector<double> maxMultiInfFactor;
 
  public:
   std::vector<HyEdgeID>& neighbors(VertID id) {
@@ -60,29 +62,30 @@ class HyGraph {
     return vertIFs_.at(v);
   }
 
-  double getIF(VertID v, HyEdgeID e) {
-    return (double) getVertIF(v)*getHyEdge(e).IF_ / maxMultiInfFactor;
+  double getIF(VertID v, VertID u, HyEdgeID e) {
+    return (double) getVertIF(v)*getHyEdge(e).IF_ / maxMultiInfFactor.at(u);
+  }
+
+  double genRandThr() {
+    return xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+  }
+
+ private:
+  std::vector<std::unordered_map<VertID, int>> restGroup_;
+ public:
+  bool isRestricted(HyEdgeID edge, VertID src, VertID dst) {
+    return restGroup_.at(edge).at(src) == restGroup_.at(edge).at(dst);
   }
 
   uint64_t numVert() { return numVert_; }
   uint64_t numHyEdges() { return hyEdges_.size(); }
   uint64_t numCheckIn() { return numCheckIn_; }
 
-  void restrictHyEdge(HyEdgeID hyedge) {
-    hyEdges_.at(hyedge).vertices_.clear();
-  }
-
-  void restrictHyEdges(std::unordered_set<HyEdgeID>& hyedges) {
-    for (auto hyedgeID: hyedges) {
-      restrictHyEdge(hyedgeID);
-    }
-  }
-
-  void init(char* fileName) {
+  void init(char* fileName, const std::string& restType, const std::string& repeatInterval) {
     std::ios::sync_with_stdio(false);
     /* Get graph data */
     std::cout << "Open file: " << fileName << std::endl;
-    std::cout << "Read ..." << std::flush;
+    std ::cout << "Read ..." << std::flush;
     std::ifstream file(fileName);
     if (file.fail()) {
       std::cerr << "!!!! File does not exist !!!! " << std::endl;
@@ -94,7 +97,7 @@ class HyGraph {
       VertID user_;
       LocationID locationID_;
       Location location_;
-      time_t checkInTime_;
+      tm checkInTime_;
     };
     std::deque<CheckIn> checkIns;
 
@@ -123,8 +126,16 @@ class HyGraph {
       int y,mo,d,h,mi,s;
       sscanf(&checkInTimeStr.at(0), "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &mi, &s);
       tm t;
-      t.tm_year = y; t.tm_mon = mo; t.tm_mday = d; t.tm_mday = d; t.tm_hour = h; t.tm_min = mi; t.tm_sec = s; t.tm_isdst = -1;
-      checkin.checkInTime_ = mktime(&t);
+      t.tm_year = y; t.tm_mon = mo; t.tm_mday = d; t.tm_hour = h; t.tm_min = mi; t.tm_sec = s; t.tm_isdst = -1;
+      mktime(&t);
+      checkin.checkInTime_ = t;
+//      std::cout << "org check-in " <<
+//                " year " << t.tm_year <<
+//                " month " << t.tm_mon <<
+//                " week " << t.tm_wday <<
+//                " mday " << t.tm_mday <<
+//                " yday " << t.tm_yday <<
+//                " hour " << t.tm_hour << std::endl;
       checkIns.push_back(checkin);
       maxLID = maxLID < checkin.locationID_ ? checkin.locationID_: maxLID;
       maxVID = maxVID < checkin.user_ ? checkin.user_: maxVID;
@@ -141,36 +152,121 @@ class HyGraph {
     }
 
     hyEdges_.reserve(checkIns.size());
+    std::vector<std::unordered_set<VertID>> hyEdge2Verts;
+    hyEdge2Verts.reserve(checkIns.size());
+
     std::vector<std::unordered_set<HyEdgeID>> location2HyEdge(maxLID+1);
-    std::deque<time_t> hyEdge2time;
+    std::deque<tm> hyEdge2time;
     int i = 0;
+    bool isWeekly = repeatInterval == "weekly" ? true: false;
     for (auto x: checkIns) {
       if (location2HyEdge.at(x.locationID_).size() == 0) {
         location2HyEdge.at(x.locationID_).insert(i);
         HyEdge hyEdge;
         hyEdge.lID_ = x.locationID_;
-        hyEdge.vertices_.insert(x.user_);
         hyEdges_.push_back(hyEdge);
-        hyEdge2time.push_back(x.checkInTime_ - (x.checkInTime_ % TIME_UNIT));
+        std::unordered_set<HyEdgeID> sets;
+        sets.insert(x.user_);
+        hyEdge2Verts.push_back(sets);
+        hyEdge2time.push_back(x.checkInTime_);
         ++i;
       } else {
         bool assigned = false;
         for (auto hyedgeid: location2HyEdge.at(x.locationID_)) {
-          if (x.checkInTime_ > hyEdge2time.at(hyedgeid) && x.checkInTime_ - hyEdge2time.at(hyedgeid) < TIME_UNIT) {
-            HyEdge &hyEdge = hyEdges_.at(hyedgeid);
-            hyEdge.vertices_.insert(x.user_);
-            assigned = true;
-            break;
+          if (isWeekly) {
+            /* weekly activity */
+//            std::cout << "weekly check-in " <<
+//              " year " << x.checkInTime_.tm_year <<
+//              " month " << x.checkInTime_.tm_mon <<
+//              " week " << x.checkInTime_.tm_wday <<
+//              " mday " << x.checkInTime_.tm_mday <<
+//              " yday " << x.checkInTime_.tm_yday <<
+//              " hour " << x.checkInTime_.tm_hour << std::endl;
+            int week = hyEdge2time.at(hyedgeid).tm_wday;
+            int hour = hyEdge2time.at(hyedgeid).tm_hour / TIME_UNIT_HOUR;
+            int newWeek = x.checkInTime_.tm_wday;
+            int newHour = x.checkInTime_.tm_hour / TIME_UNIT_HOUR;
+            if (week == newWeek && hour == newHour) {
+              hyEdge2Verts.at(hyedgeid).insert(x.user_);
+              assigned = true;
+              break;
+            }
+          } else {
+//            std::cout << "daily check-in " <<
+//                      " year " << x.checkInTime_.tm_year <<
+//                      " month " << x.checkInTime_.tm_mon <<
+//                      " week " << x.checkInTime_.tm_wday <<
+//                      " mday " << x.checkInTime_.tm_mday <<
+//                      " yday " << x.checkInTime_.tm_yday <<
+//                      " hour " << x.checkInTime_.tm_hour << std::endl;
+            /* daily activity */
+            int hour = hyEdge2time.at(hyedgeid).tm_hour / TIME_UNIT_HOUR;
+            int newHour = x.checkInTime_.tm_hour / TIME_UNIT_HOUR;
+            if (hour == newHour) {
+              hyEdge2Verts.at(hyedgeid).insert(x.user_);
+              assigned = true;
+              break;
+            }
           }
         }
         if (!assigned) {
           location2HyEdge.at(x.locationID_).insert(i);
           HyEdge hyEdge;
           hyEdge.lID_ = x.locationID_;
-          hyEdge.vertices_.insert(x.user_);
           hyEdges_.push_back(hyEdge);
-          hyEdge2time.push_back(x.checkInTime_ - (x.checkInTime_ % TIME_UNIT));
+          std::unordered_set<HyEdgeID> sets;
+          sets.insert(x.user_);
+          hyEdge2Verts.push_back(sets);
+          hyEdge2time.push_back(x.checkInTime_);
           ++i;
+        }
+      }
+    }
+
+    for (uint64_t i = 0; i < hyEdge2Verts.size(); ++i) {
+      for (auto v: hyEdge2Verts.at(i)) {
+        hyEdges_.at(i).vertices_.push_back(v);
+      }
+    }
+    hyEdge2Verts.clear();
+
+    // todo
+    int restrictionType;
+    const int DELETE = 1; const int SHRINK = 2; const int SPLIT = 3;
+    if (restType == "delete") {
+      restrictionType = DELETE;
+    } else if (restType == "shrink") {
+      restrictionType = SHRINK;
+    } else if (restType == "split") {
+      restrictionType = SPLIT;
+    } else {
+      std::cout << restType << " is invalid measure type. set delete " << std::endl;
+      restrictionType = DELETE;
+    }
+    restGroup_.resize(hyEdges_.size());
+    for (uint64_t i = 0; i < restGroup_.size(); ++i) {
+      for (uint64_t j = 0; j < hyEdges_.at(i).vertices_.size(); ++j) {
+        VertID v = hyEdges_.at(i).vertices_.at(j);
+        if (restrictionType == DELETE) {
+          restGroup_.at(i).emplace(v, 0);
+        } else if (restrictionType == SHRINK) {
+          // todo shrink to half size
+          if (j % 2) {
+            restGroup_.at(i).emplace(v, 0);
+          } else {
+            restGroup_.at(i).emplace(v, j);
+          }
+        } else if (restrictionType == SPLIT) {
+          // todo split to two activities
+          if (j % 2) {
+            restGroup_.at(i).emplace(v, 0);
+          } else {
+            restGroup_.at(i).emplace(v, 1);
+          }
+        } else {
+          /* never reached */
+          std::cerr << "Error at Line " << __LINE__ << " File " << __FILE__ << std::endl;
+          exit(1);
         }
       }
     }
@@ -183,74 +279,91 @@ class HyGraph {
     }
 
     /* init infection factor */
-    // todo init infection factor from file
-    vertIFs_ = std::vector<double>(numVert_);
-    std::mt19937 randgen;
-    randgen.seed(99);
-    std::lognormal_distribution<float> lognorm(0.0, 0.25);
+    double min = 1.0;
+    double max = 1000;
+    double alpha = 2.1;
     //xoshiro256p::initSeed(99);
+    auto zipf = [&]{ return std::pow((std::pow(max, (1.0-alpha)) - std::pow(min, (1.0-alpha))) * xoshiro256p::to_doubleFrom0to1(xoshiro256p::next()) + std::pow(min,(1.0-alpha)), 1.0/(1.0-alpha));};
+
+    vertIFs_ = std::vector<double>(numVert_);
     for(auto& x: vertIFs_) {
-      //x = 1.0;//lognorm(randgen);//
-      x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      x = 1.0;
+      //x = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      //x = zipf();
     }
     for (auto& x: hyEdges_) {
-      //x.IF_ = 1.0;//lognorm(randgen);
-      x.IF_ = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      //x.IF_ = 1;
+      x.IF_ = zipf();
+      //x.IF_ = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
     }
 
-    /* normalize infection factor by the max-degree vertex */
-    maxMultiInfFactor = 0;
+    /* normalize infection factor */
+    double maxIF = 0.0;
+    uint64_t maxDegree = 0;
+    maxMultiInfFactor.resize(numVert());
     for (VertID v = 0; v < numVert(); ++v) {
       double infFactor = 0;
-      for (HyEdgeID i = 0; i < neighbors(v).size(); ++i) {
-        infFactor += hyEdges_.at(neighbors(v).at(i)).IF_*vertIFs_.at(v);
+      uint64_t degree = 0;
+      for (auto hyID: neighbors(v)) {
+        for (auto u :hyEdges_.at(hyID).vertices_) {
+          infFactor += hyEdges_.at(hyID).IF_*vertIFs_.at(u);
+          ++degree;
+        }
       }
-      if (infFactor > maxMultiInfFactor) {
-        maxMultiInfFactor = infFactor;
+      maxMultiInfFactor.at(v) = infFactor;
+      if (infFactor > maxIF) {
+        maxIF = infFactor;
+      }
+      if (degree > maxDegree) {
+        maxDegree = degree;
       }
     }
-    if (maxMultiInfFactor < 1) maxMultiInfFactor = 1;
-    std::cout << "maxMultiInfFactor" << maxMultiInfFactor << std::endl;
-    //maxMultiInfFactor = maxMultiInfFactor;
+//    std::cout << "maxMultiInfFactor" << (uint64_t) maxIF << " max degree " << maxDegree << std::endl;
+
+    // todo
+    if (false) {
+      std::cout << "Normalized by max infection factor " << std::endl;
+      for (VertID v = 0; v < numVert(); ++v) {
+        maxMultiInfFactor.at(v) = maxIF;
+      }
+    }
 
     // todo remove
-    int max = 0;
-    for (auto& x: hyEdges_) {
-      if (x.vertices_.size() > max) {
-        max = x.vertices_.size();
-      }
-    }
-    std::vector<int> sizeDistribution(max+1, 0);
-    for (auto& x: hyEdges_) {
-      ++sizeDistribution.at(x.vertices_.size());
-    }
-    for (auto& x: sizeDistribution) {
-      std::cout << x << ",";
-    }
-    std::cout << std::endl;
-
-    max = 0;
-    std::vector<int> degree(numVert(), 0);
-    for (VertID v = 0; v < numVert(); ++v) {
-      for (HyEdgeID i = 0; i < neighbors(v).size(); ++i) {
-        ++degree.at(v);
-      }
-      if (degree.at(v) > max) {
-        max = degree.at(v);
-      }
-    }
-
-    std::vector<int> degreeDistribution(max+1, 0);
-    for (VertID v = 0; v < numVert(); ++v) {
-      ++degreeDistribution.at(degree.at(v));
-    }
-    for (auto& x: degreeDistribution) {
-      std::cout << x << ",";
-    }
-    std::cout << std::endl;
-    std::vector<int> actDegreeDistribution(max+1, 0);
-
-
+//    int max = 0;
+//    for (auto& x: hyEdges_) {
+//      if (x.vertices_.size() > max) {
+//        max = x.vertices_.size();
+//      }
+//    }
+//    std::vector<int> sizeDistribution(max+1, 0);
+//    for (auto& x: hyEdges_) {
+//      ++sizeDistribution.at(x.vertices_.size());
+//    }
+//    for (auto& x: sizeDistribution) {
+//      std::cout << x << ",";
+//    }
+//    std::cout << std::endl;
+//
+//    max = 0;
+//    std::vector<int> degree(numVert(), 0);
+//    for (VertID v = 0; v < numVert(); ++v) {
+//      for (HyEdgeID i = 0; i < neighbors(v).size(); ++i) {
+//        ++degree.at(v);
+//      }
+//      if (degree.at(v) > max) {
+//        max = degree.at(v);
+//      }
+//    }
+//
+//    std::vector<int> degreeDistribution(max+1, 0);
+//    for (VertID v = 0; v < numVert(); ++v) {
+//      ++degreeDistribution.at(degree.at(v));
+//    }
+//    for (auto& x: degreeDistribution) {
+//      std::cout << x << ",";
+//    }
+//    std::cout << std::endl;
+//    std::vector<int> actDegreeDistribution(max+1, 0);
   }
 };
 
