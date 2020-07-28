@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
   std::cout << "## # CheckIn: " << checkins.size() << " (Before Clean up) " << count << ". # Users: "<< userSet.size() << ". # Locations: " << locationSet.size() << std::endl;
   std::cout << "## [user] [check-in time(20YY-MM-DD-HH:MM:SS)] [latitude] [longitude] [location id]" << std::endl;
   for (auto x: checkins) {
-    std::cout << userSet.at(x.user) << " " << x.checkInTime  << " " << x.latitude << " " << x.lontitude << " " << locationSet.at(x.locationID) << std::endl;
+    std::cout << userSet.at(x.user) << "," << x.checkInTime  << "," << x.latitude << "," << x.lontitude << "," << locationSet.at(x.locationID) << std::endl;
   }
   std::cerr << "Finish" << std::endl;
 }

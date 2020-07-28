@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
   hygraph.init(argv[optind], measureType, repeatInterval);
 
   int k = std::atoi(argv[optind+1]);
+  if (k > hygraph.numHyEdges()) k = hygraph.numHyEdges() - 1;
 
   std::cout << "--------- Initial Info --------" << std::endl;
   std::cout << " Data: " << argv[optind] << std::endl;

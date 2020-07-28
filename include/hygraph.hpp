@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <time.h>
 #include <unordered_set>
 #include <unordered_map>
@@ -111,18 +112,34 @@ class HyGraph {
       if (line[0] == '%') continue;
       if (line[0] == '/') continue;
 
-      std::istringstream iss(line);
+      std::stringstream ss(line);
       CheckIn checkin;
       std::string checkInTimeStr;
-      if (!(iss >> checkin.user_
-                >> checkInTimeStr
-                >> checkin.location_.latitude_
-                >> checkin.location_.longitude_
-                >> checkin.locationID_)) {
-        std::cerr << "Fail to read files. Check line " << count << std::endl;
-        std::cerr << "Clean up File first. " << std::endl;
-        exit(1);
+      std::string elementStr;
+      std::getline(ss, elementStr,',');
+      checkin.user_ = std::stol(elementStr);
+
+      std::getline(ss, elementStr,',');
+      checkInTimeStr = elementStr;
+
+      std::getline(ss, elementStr,',');
+      checkin.location_.latitude_ = std::stod(elementStr);
+
+      std::getline(ss, elementStr,',');
+      checkin.location_.longitude_ = std::stod(elementStr);
+
+      std::getline(ss, elementStr,',');
+      checkin.locationID_ = std::stol(elementStr);
+
+      if (ss.good()) {
+        if (VERBOSE) std::cout << "Parsing activity category" << std::endl;
+        std::getline(ss, elementStr,','); // [orig_category]
+        std::getline(ss, elementStr,','); // [orig_category id]
+        std::getline(ss, elementStr,','); // [category]
+        std::getline(ss, elementStr,','); // [category id]
+        std::cout << elementStr << std::endl; // todo Peter
       }
+
       int y,mo,d,h,mi,s;
       sscanf(&checkInTimeStr.at(0), "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &mi, &s);
       tm t;
