@@ -2,7 +2,7 @@
 
 BIN_HOME=/home/masa/workspace/cpp/HyInfluenceMin/buildCluster
 
-GRAPH="../data/brightkite.checkin ../data/gowalla.checkin"
+GRAPH="../data/brightkite.checkin ../data/gowalla.checkin ../data/dataset_TSMC2014_NYC.checkin ../data/dataset_TSMC2014_TKY.checkin"
 MEASURE="delete shrink split"
 INTERVAL="weekly daily"
 
@@ -10,7 +10,7 @@ for rand in 1 2 3 4 5
 do
   for interval in ${INTERVAL}
   do
-    for tunit in 24 12 6
+    for tunit in 12 6
     do
       for graph in ${GRAPH}
       do

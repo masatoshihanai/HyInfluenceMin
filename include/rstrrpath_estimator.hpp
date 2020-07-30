@@ -61,7 +61,7 @@ class RstRRPathEstimator {
     VertID v = xoshiro256p::next() % hygraph_->numVert();
     std::unordered_set<VertID> visited;
     visited.insert(v);
-    std::unordered_map<HyEdgeID, uint64_t> visitedHyEdges; // <HyEdgeID, dst from v>
+    std::unordered_set<HyEdgeID> visitedHyEdges;
     rstRRpath.vertice_.push_back(v);
 
     /* Backward traversal from v */
@@ -74,7 +74,7 @@ class RstRRPathEstimator {
           if (rand < hygraph_->getIF(u, v, hyEid)) {
             if (visited.count(u) == 0) {
               if (visitedHyEdges.count(hyEid) == 0) {
-                visitedHyEdges.emplace(hyEid, dstFromV);
+                visitedHyEdges.insert(hyEid);
                 hyEdge2RstRRpath_.at(hyEid).push_back(rstRRpaths_.size());
               }
               visited.insert(u);
@@ -90,20 +90,26 @@ class RstRRPathEstimator {
         }
         if (finish) break;
       }
-
       if (parent == -1) {
         break;
       } else {
         v = parent;
         parent = -1;
       }
-      ++dstFromV;
     }
 
-    // todo fix bug
-    for (auto x: visitedHyEdges) {
-      reduction_.at(x.first) += (dstFromV - x.second);
+    visitedHyEdges.clear();
+    for (uint64_t i = 0; i < rstRRpath.hyedges_.size(); ++i) {
+      HyEdgeID id = rstRRpath.hyedges_.at(i);
+      VertID src = rstRRpath.vertice_.at(i);
+      VertID dst = rstRRpath.vertice_.at(i+1);
+
+      if (visitedHyEdges.count(id) == 0 && hygraph_->isRestricted(id, src, dst)) {
+        reduction_.at(id) += (rstRRpath.hyedges_.size() - i);
+      }
+      visitedHyEdges.insert(id);
     }
+
     if (rstRRpath.hyedges_.size() != 0) {
       rstRRpaths_.push_back(rstRRpath);
     }

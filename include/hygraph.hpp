@@ -75,7 +75,7 @@ class HyGraph {
   std::vector<std::unordered_map<VertID, int>> restGroup_;
  public:
   bool isRestricted(HyEdgeID edge, VertID src, VertID dst) {
-    return restGroup_.at(edge).at(src) == restGroup_.at(edge).at(dst);
+    return restGroup_.at(edge).at(src) != restGroup_.at(edge).at(dst);
   }
 
   uint64_t numVert() { return numVert_; }
@@ -132,12 +132,12 @@ class HyGraph {
       checkin.locationID_ = std::stol(elementStr);
 
       if (ss.good()) {
-        if (VERBOSE) std::cout << "Parsing activity category" << std::endl;
+        //if (VERBOSE) std::cout << "Parsing activity category" << std::endl;
         std::getline(ss, elementStr,','); // [orig_category]
         std::getline(ss, elementStr,','); // [orig_category id]
         std::getline(ss, elementStr,','); // [category]
         std::getline(ss, elementStr,','); // [category id]
-        std::cout << elementStr << std::endl; // todo Peter
+        //std::cout << elementStr << std::endl; // todo Peter
       }
 
       int y,mo,d,h,mi,s;
@@ -265,7 +265,7 @@ class HyGraph {
       for (uint64_t j = 0; j < hyEdges_.at(i).vertices_.size(); ++j) {
         VertID v = hyEdges_.at(i).vertices_.at(j);
         if (restrictionType == DELETE) {
-          restGroup_.at(i).emplace(v, 0);
+          restGroup_.at(i).emplace(v, j);
         } else if (restrictionType == SHRINK) {
           // todo shrink to half size
           if (j % 2) {
