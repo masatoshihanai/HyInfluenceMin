@@ -98,16 +98,16 @@ class RstRRPathEstimator {
       }
     }
 
-    visitedHyEdges.clear();
+    HyIDSet restricted;
     for (uint64_t i = 0; i < rstRRpath.hyedges_.size(); ++i) {
       HyEdgeID id = rstRRpath.hyedges_.at(i);
       VertID src = rstRRpath.vertice_.at(i);
       VertID dst = rstRRpath.vertice_.at(i+1);
 
-      if (visitedHyEdges.count(id) == 0 && hygraph_->isRestricted(id, src, dst)) {
+      if (restricted.count(id) == 0 && hygraph_->isRestricted(id, src, dst)) {
         reduction_.at(id) += (rstRRpath.hyedges_.size() - i);
+        restricted.insert(id);
       }
-      visitedHyEdges.insert(id);
     }
 
     if (rstRRpath.hyedges_.size() != 0) {

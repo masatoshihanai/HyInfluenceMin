@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
   std::cout << std::endl;
 
   /* Random */
-  VertSet topKrandom;
+  HyIDSet topKrandom;
   for (int i = 0; i < k; ++i) {
     HyEdgeID e;
     while (topKrandom.count((e = (xoshiro256p::next() % hygraph.numHyEdges()))) != 0) {};
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
   std::cout << std::endl;
 
   /* Degree-based */
-  VertSet topKdegree;
+  HyIDSet topKdegree;
   using HyDeg = std::pair<HyEdgeID, double>;
   std::vector<HyDeg> degrees;
   for (HyEdgeID i = 0; i < hygraph.numHyEdges(); ++i) { degrees.emplace_back(i, hygraph.getHyEdge(i).vertices_.size()); }

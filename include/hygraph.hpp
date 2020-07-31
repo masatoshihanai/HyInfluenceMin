@@ -31,7 +31,7 @@ struct Location {
 };
 using Locations = std::vector<Location>;
 
-using HyEdgeID = int;
+using HyEdgeID = long;
 struct HyEdge{
   double IF_;
   LocationID lID_ = 0;
@@ -169,7 +169,7 @@ class HyGraph {
     }
 
     hyEdges_.reserve(checkIns.size());
-    std::vector<std::unordered_set<VertID>> hyEdge2Verts;
+    std::vector<std::unordered_set<HyEdgeID>> hyEdge2Verts;
     hyEdge2Verts.reserve(checkIns.size());
 
     std::vector<std::unordered_set<HyEdgeID>> location2HyEdge(maxLID+1);

@@ -6,7 +6,7 @@ GRAPH="../data/brightkite.checkin ../data/gowalla.checkin ../data/dataset_TSMC20
 MEASURE="delete shrink split"
 INTERVAL="weekly daily"
 
-for rand in 1 2 3 4 5
+for rand in 1
 do
   for interval in ${INTERVAL}
   do
