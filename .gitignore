@@ -6,7 +6,7 @@ data/
 *.org
 .DS_Store
 cmake-build-debug
-script
+script/
 
 ## for C++
 # Prerequisites
