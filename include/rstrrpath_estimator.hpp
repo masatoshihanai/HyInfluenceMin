@@ -170,7 +170,7 @@ class RstRRPathEstimator {
     }
 
     if (VERBOSE) {
-      std::cout << "    (i-th, EdgeID, # Reduction):" << std::flush;
+      // todo std::cout << "    (i-th, EdgeID, # Reduction):" << std::flush;
     }
     for (int i = 0; i < k_; ++i) {
       /* Find k-th local optimum */
@@ -186,7 +186,7 @@ class RstRRPathEstimator {
       sumReduction += maxReduction;
 
       if (VERBOSE) {
-        std::cout << "(" << i << "-th," << maxEdge << "," << maxReduction << ")" << std::flush;
+        // TODO std::cout << "(" << i << "-th," << maxEdge << "," << maxReduction << ")" << std::flush;
       }
 
       /* Update RstRR path */

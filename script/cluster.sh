@@ -8,17 +8,17 @@ INTERVAL="weekly daily"
 
 for rand in 1
 do
-  for interval in ${INTERVAL}
+  for graph in ${GRAPH}
   do
-    for tunit in 12 6
+    for interval in ${INTERVAL}
     do
-      for graph in ${GRAPH}
+      for tunit in 1
       do
         for m in ${MEASURE}
         do
           for k in 10 20 30 40 50 60 70 80 90 100
           do
-            ${BIN_HOME}/HyMin -v -m ${m} -s ${rand} -r ${interval} -u ${tunit} ${graph} ${k} 2>&1 | tee -a log.log
+            ${BIN_HOME}/HyMin -v -a -m ${m} -s ${rand} -r ${interval} -u ${tunit} ${graph} ${k} 2>&1 | tee -a log.log
           done
         done
       done

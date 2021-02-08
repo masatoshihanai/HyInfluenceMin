@@ -78,8 +78,9 @@ We have successed to compile and run the program in these environments:
 
 ### 3. How to run HyMinSolver {#run}
 
+
 ```bash
-$ ./HyMin <checkin-data> <# of restriction activities>
+$ ./HyMin [-h] [-v] [-a] [-m <safety measure>] [-s <random seed>] [-r <repeat interval>] [-u time unit] <checkin-file> <# of restriction activities> 
 ```
 
 Run with `-h` for the detail information.
@@ -87,13 +88,18 @@ Run with `-h` for the detail information.
 $ ./HyMin -h
 ```
 ```bash
- HyMin - Hypergraph-based Influence Minimization Soler
-   Usage: $ ./HyMin [-h] [-v] <checkin-file> <# of restriction activities>      
+ HyMin - Hypergraph-based Influence Minimization Solver
+   Usage: $ ./HyMin [-h] [-v] [-a] [-m <safety measure>] [-s <random seed>] [-r <repeat interval>] [-u time unit] <checkin-file> <# of restriction activities> 
       -h: Help
       -v: Verbose. Output details
-       
+      -m: Safety Measure type. delete, shrink, or split (default: delete)
+      -a: Analyze with MonteCarlo Simulation (default: off) !! Time-Consuming !!
+      -s: Random seed (default: 1)
+      -r: Repeat interval. weekly or daily (default: weekly) 
+      -u: Time unit for activity (hour).  (default: 12). Check-ins within x hours are considered to be the same activity. 
+
     Example to use:
-      $ ./HyMin -v ../data/Brightkite.checkin
+      $ ./HyMin -v -m delete ../data/brightkite.checkin 100
 ```
 
 ### TODOs

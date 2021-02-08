@@ -9,6 +9,7 @@
 #ifndef HYMINSOLVER_MONTECARLO_HPP
 #define HYMINSOLVER_MONTECARLO_HPP
 
+#include <deque>
 #include "hygraph.hpp"
 #include "wtime.hpp"
 
@@ -20,28 +21,28 @@ class MonteCarloSimInfEstimator {
     std::cout << "  Start Monte Carlo Simulation. # Sampling: " << numSampling << " ... " << std::endl;
     std::vector<VertID> numInfected(numSampling, 0);
 
-#ifdef HAS_OMP
-    int numThreads = omp_get_num_threads();
-    std::vector<std::vector<double>> vertThrInitVec(numThreads);
-    std::vector<std::vector<double>> vertThrVec(numThreads);
-
-    #pragma omp parallel for
-    for (int i = 0; i < numThreads; ++i) {
-      vertThrInitVec.at(i) = std::vector<double>(hyGraph->numVert());
-      vertThrVec.at(i) = std::vector<double>(hyGraph->numVert());
-    }
-
-    #pragma omp parallel for
-    for (int i = 0; i < numSampling; ++i) {
-      int thrNum = omp_get_thread_num();
-      for (int j = 0; j < thrNum; ++j) { xoshiro256p::jump(); }
-      std::vector<double>& vertThrInit = vertThrInitVec.at(thrNum);
-      std::vector<double>& vertThr = vertThrVec.at(thrNum);
-#else
+//#ifdef HAS_OMP
+//    int numThreads = omp_get_num_threads();
+//    std::vector<std::vector<double>> vertThrInitVec(numThreads);
+//    std::vector<std::vector<double>> vertThrVec(numThreads);
+//
+//    #pragma omp parallel for
+//    for (int i = 0; i < numThreads; ++i) {
+//      vertThrInitVec.at(i) = std::vector<double>(hyGraph->numVert());
+//      vertThrVec.at(i) = std::vector<double>(hyGraph->numVert());
+//    }
+//
+//    #pragma omp parallel for
+//    for (int i = 0; i < numSampling; ++i) {
+//      int thrNum = omp_get_thread_num();
+//      for (int j = 0; j < thrNum; ++j) { xoshiro256p::jump(); }
+//      std::vector<double>& vertThrInit = vertThrInitVec.at(thrNum);
+//      std::vector<double>& vertThr = vertThrVec.at(thrNum);
+//#else
     std::vector<double> vertThrInit(hyGraph->numVert());
     std::vector<double> vertThr(hyGraph->numVert());
     for (int i = 0; i < numSampling; ++i) {
-#endif
+//#endif
       double start = getTime();
       std::vector<bool> infectedV(hyGraph->numVert(), false);
       std::vector<bool> visitV(hyGraph->numVert(), false);

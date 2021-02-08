@@ -14,8 +14,11 @@
 #include <sstream>
 #include <string>
 #include <time.h>
+#include <vector>
 #include <unordered_set>
 #include <unordered_map>
+
+#include "external/xoshiro256plus.hpp"
 
 int TIME_UNIT_HOUR = 12; // Chech-ins within 12 hours are considered to be the same activity
 
@@ -49,6 +52,8 @@ class HyGraph {
   Locations locations_;
   uint64_t numCheckIn_;
   std::vector<double> maxMultiInfFactor;
+ public:
+  std::string fName_;
 
  public:
   std::vector<HyEdgeID>& neighbors(VertID id) {
@@ -84,6 +89,7 @@ class HyGraph {
 
   void init(char* fileName, const std::string& restType, const std::string& repeatInterval) {
     std::ios::sync_with_stdio(false);
+    fName_ = std::string(fileName);
     /* Get graph data */
     std::cout << "Open file: " << fileName << std::endl;
     std ::cout << "Read ..." << std::flush;
@@ -310,8 +316,8 @@ class HyGraph {
     }
     for (auto& x: hyEdges_) {
       //x.IF_ = 1;
-      x.IF_ = zipf();
-      //x.IF_ = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
+      //x.IF_ = zipf();
+      x.IF_ = xoshiro256p::to_doubleFrom0to1(xoshiro256p::next());
     }
 
     /* normalize infection factor */
