@@ -102,5 +102,3 @@ $ ./HyMin -h
       $ ./HyMin -v -m delete ../data/brightkite.checkin 100
 ```
 
-### TODOs
-- 
