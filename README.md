@@ -1,8 +1,5 @@
 # _**Hypergraph-based Influence Minimization**_ : Influence Minimization Solver for Hypergraph 
 
-## Reference
-
-- M. Hanai, et.al. _"Influence Minimization of Virus Infection via Social Gathering Activities: Towards Effective Spread Control of COVID-19"_ (2020)
 
 ## 1, Quick Start
 
